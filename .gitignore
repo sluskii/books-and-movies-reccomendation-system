@@ -1,3 +1,3 @@
 .venv*
 # datasets*
-local_sentence_transformer_model*
+# local_sentence_transformer_model*
