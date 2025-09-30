@@ -277,7 +277,7 @@ selected_view = st.sidebar.radio(
 
 if selected_view == "Data Overview 📊":
     st.header("Data Overview: Books and Movie User Profiles")
-    st.markdown("Use the tabs below to inspect the datasets used by the recommendation engine.")
+    st.markdown("Use the tabs below to inspect the processed datasets used by the recommendation engine.")
 
     # --- START OF TABBED INTERFACE ---
     tab_books, tab_movies = st.tabs(["📚 Books Dataset", "🎬 Movie User Profiles"])
