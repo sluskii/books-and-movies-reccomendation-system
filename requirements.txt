@@ -1,7 +1,15 @@
+<<<<<<< HEAD
 pandas==2.3.3
 numpy==2.3.3
 scikit-learn==1.7.2
 joblib==1.5.2
 streamlit==1.50.0
+=======
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.7.2
+joblib==1.5.2
+streamlit==1.42.0
+>>>>>>> 3c7a58e (updated requirements.txt)
 sentence-transformers==5.1.1
 torch
