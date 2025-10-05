@@ -11,8 +11,6 @@ st.set_page_config(page_title="🎬 Movie-Informed Book Recs", layout="wide")
 st.title("🎬 Movie Preferences → 📚 Book Recommendations")
 
 # --- DEPLOYMENT-SAFE CONSTANTS ---
-# Use environment variables for deployment flexibility
-DEPLOYMENT_MODE = os.getenv('STREAMLIT_DEPLOYMENT', 'local')  # 'local' or 'cloud'
 LOCAL_MODEL_PATH = './local_sentence_transformer_model'
 GENRE_EMBEDDINGS_PATH = 'genre_embeddings.npy' 
 USER_EMBEDDINGS_PATH = 'user_embeddings.npy' 
@@ -80,77 +78,48 @@ def initialize_and_train_models(df_data, user_profiles_df):
     Initializes SentenceTransformers and loads pre-trained NN models (or trains them if missing).
     """
     
-    # 1. Check for basic prerequisites - DEPLOYMENT SAFE
+    # 1. Check for basic prerequisites
     if not os.path.exists(LOCAL_MODEL_PATH) or not os.listdir(LOCAL_MODEL_PATH):
-        if DEPLOYMENT_MODE == 'cloud':
-            st.error("🌐 **Cloud Deployment Issue**: Model files not found.")
-            st.info("💡 **Solution**: This app requires pre-trained model files. Please:")
-            st.code("""
-1. Download model files from GitHub Releases
-2. Configure MODEL_FILES_URL in Streamlit Cloud secrets
-3. Or use the deployment-ready version: main_deployment.py
-            """)
-            st.stop()
-        else:
-            st.error(f"🚨 Model weights not found at **{LOCAL_MODEL_PATH}**. Please run `python model_setup.py` first.")
-            st.stop()
+        st.error(f"🚨 Model weights not found at **{LOCAL_MODEL_PATH}**. Please run `python model_setup.py` first.")
+        st.stop()
         
     # --- FAST PATH: Load Pre-trained NN Models (The desired path) ---
     # The InconsistentVersionWarning is expected here if sklearn versions mismatch, but the code proceeds.
     if os.path.exists(NN_GENRE_MODEL_PATH) and os.path.exists(NN_USER_MODEL_PATH):
-        try:
-            # Load model instances (needed for new query encoding)
-            model_genre = SentenceTransformer(LOCAL_MODEL_PATH)
-            model_user = SentenceTransformer(LOCAL_MODEL_PATH)
-            
-            # Load pre-trained NearestNeighbors models (INSTANT LOAD)
-            nn_model_genre = joblib.load(NN_GENRE_MODEL_PATH) 
-            nn_model_user = joblib.load(NN_USER_MODEL_PATH)   
-            
-            return model_genre, nn_model_genre, model_user, nn_model_user
-        except Exception as e:
-            if DEPLOYMENT_MODE == 'cloud':
-                st.error("🌐 **Cloud Deployment Issue**: Failed to load models.")
-                st.info("💡 **Solution**: Use the deployment-ready version with cloud storage support.")
-                st.stop()
-            else:
-                st.error(f"Error loading models: {str(e)}")
-                st.stop()
+        
+        # Load model instances (needed for new query encoding)
+        model_genre = SentenceTransformer(LOCAL_MODEL_PATH)
+        model_user = SentenceTransformer(LOCAL_MODEL_PATH)
+        
+        # Load pre-trained NearestNeighbors models (INSTANT LOAD)
+        nn_model_genre = joblib.load(NN_GENRE_MODEL_PATH) 
+        nn_model_user = joblib.load(NN_USER_MODEL_PATH)   
+        
+        return model_genre, nn_model_genre, model_user, nn_model_user
 
     # --- SLOW PATH (Fallback: If joblib files don't exist, we must train) ---
     if not os.path.exists(GENRE_EMBEDDINGS_PATH) or not os.path.exists(USER_EMBEDDINGS_PATH):
-        if DEPLOYMENT_MODE == 'cloud':
-            st.error("🌐 **Cloud Deployment Issue**: Training files not available.")
-            st.info("💡 **Solution**: Cloud deployment requires pre-trained models. Use main_deployment.py instead.")
-            st.stop()
-        else:
-            st.error("🚨 Embeddings files are missing. Please run the setup script to create them.")
-            st.stop()
+        st.error("🚨 Embeddings files are missing. Please run the setup script to create them.")
+        st.stop()
 
     # Load Model Instances & Embeddings
-    try:
-        model_genre = SentenceTransformer(LOCAL_MODEL_PATH)
-        model_user = SentenceTransformer(LOCAL_MODEL_PATH) 
-        genre_embeddings = np.load(GENRE_EMBEDDINGS_PATH)
-        user_embeddings = np.load(USER_EMBEDDINGS_PATH)
-        K_NEIGHBORS = 50 # Constant for NN training
+    model_genre = SentenceTransformer(LOCAL_MODEL_PATH)
+    model_user = SentenceTransformer(LOCAL_MODEL_PATH) 
+    genre_embeddings = np.load(GENRE_EMBEDDINGS_PATH)
+    user_embeddings = np.load(USER_EMBEDDINGS_PATH)
+    K_NEIGHBORS = 10
 
-        # 3. Training and Saving Genre Nearest Neighbors (SLOW STEP)
-        nn_model_genre = NearestNeighbors(n_neighbors=K_NEIGHBORS, metric='cosine', algorithm='auto')
-        nn_model_genre.fit(genre_embeddings)
-        joblib.dump(nn_model_genre, NN_GENRE_MODEL_PATH) # <-- SAVE TRAINED MODEL
+    # 3. Training and Saving Genre Nearest Neighbors (SLOW STEP)
+    nn_model_genre = NearestNeighbors(n_neighbors=K_NEIGHBORS, metric='cosine', algorithm='auto')
+    nn_model_genre.fit(genre_embeddings)
+    joblib.dump(nn_model_genre, NN_GENRE_MODEL_PATH) # <-- SAVE TRAINED MODEL
 
-        # 4. Training and Saving User Nearest Neighbors (SLOW STEP)
-        nn_model_user = NearestNeighbors(n_neighbors=K_NEIGHBORS, metric='cosine', algorithm='auto')
-        nn_model_user.fit(user_embeddings)
-        joblib.dump(nn_model_user, NN_USER_MODEL_PATH) # <-- SAVE TRAINED MODEL
+    # 4. Training and Saving User Nearest Neighbors (SLOW STEP)
+    nn_model_user = NearestNeighbors(n_neighbors=K_NEIGHBORS, metric='cosine', algorithm='auto')
+    nn_model_user.fit(user_embeddings)
+    joblib.dump(nn_model_user, NN_USER_MODEL_PATH) # <-- SAVE TRAINED MODEL
 
-        return model_genre, nn_model_genre, model_user, nn_model_user
-    except Exception as e:
-        st.error(f"Error during model training: {str(e)}")
-        if DEPLOYMENT_MODE == 'cloud':
-            st.info("💡 **For Cloud Deployment**: Use main_deployment.py with proper model file handling.")
-        st.stop()
+    return model_genre, nn_model_genre, model_user, nn_model_user
 
 # ==============================================================================
 # --- CORE RECOMMENDATION LOGIC (Functions defined separately) ---
@@ -174,7 +143,6 @@ def get_ranked_recommendations_for_user(user_id, user_profile_data, df_data, mod
     candidate_df['normalized_rating'] = candidate_df['rating'] / 5.0
     candidate_df['normalized_genre_similarity'] = 1 - candidate_df['genre_distance']
     
-    # **WEIGHTS ADJUSTED:** Increased rating weight from 0.01 to 0.05 to improve diversity.
     candidate_df['combined_relevance_score'] = (WEIGHT_GENRE * candidate_df['normalized_genre_similarity']) + (WEIGHT_RATING * candidate_df['normalized_rating'])
     ranked_recommendations = candidate_df.sort_values(by='combined_relevance_score', ascending=False)
 
@@ -273,14 +241,6 @@ def get_combined_recommendations(
 # ==============================================================================
 
 st.sidebar.title("App Status")
-
-# Show deployment mode
-if DEPLOYMENT_MODE == 'cloud':
-    st.sidebar.info("🌐 Running in Cloud Deployment Mode")
-    st.sidebar.warning("⚠️ This version requires local model files. For cloud deployment, use main_deployment.py")
-else:
-    st.sidebar.info("💻 Running in Local Development Mode")
-
 initial_loading_spinner = st.empty() 
 status_placeholder = st.sidebar.empty()
 progress_bar_placeholder = st.sidebar.empty()
