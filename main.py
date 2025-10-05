@@ -12,9 +12,9 @@ st.title("🎬 Movie Preferences → 📚 Book Recommendations")
 
 # --- CONSTANT DEFINITION ---
 LOCAL_MODEL_PATH = './local_sentence_transformer_model'
-GENRE_EMBEDDINGS_PATH = 'genre_embeddings.npy' 
+GENRE_EMBEDDINGS_PATH = 'book_embeddings.npy' 
 USER_EMBEDDINGS_PATH = 'user_embeddings.npy' 
-NN_GENRE_MODEL_PATH = 'nn_model_genre.joblib' 
+NN_GENRE_MODEL_PATH = 'nn_model_book.joblib' 
 NN_USER_MODEL_PATH = 'nn_model_user.joblib'   
 BOOK_DATA_PATH = 'datasets/data.csv'
 USER_PROFILES_PATH = 'datasets/user_profiles.csv' 
@@ -158,7 +158,7 @@ def get_ranked_recommendations_for_user(user_id, user_profile_data, df_data, mod
     candidate_df['combined_relevance_score'] = (WEIGHT_GENRE * candidate_df['normalized_genre_similarity']) + (WEIGHT_RATING * candidate_df['normalized_rating'])
     ranked_recommendations = candidate_df.sort_values(by='combined_relevance_score', ascending=False)
     
-    top_recommendations = ranked_recommendations[['title', 'rating', 'combined_relevance_score']].head(top_n)
+    top_recommendations = ranked_recommendations[['title', 'rating', 'combined_relevance_score', 'description']].head(top_n)
     top_recommendations['user_id'] = user_id
     top_recommendations['cluster'] = user_profile['cluster']
     
@@ -223,14 +223,15 @@ def get_combined_recommendations(
         avg_combined_relevance_score=('combined_relevance_score', 'mean'),
         max_rating=('rating', 'max'),
         recommendation_count=('title', 'count'), 
-        book_genres=('genres_string', 'first') 
+        book_genres=('genres_string', 'first'),
+        book_description=('description', 'first')  # Uncomment if description aggregation is needed
     ).reset_index()
     
     final_ranking = final_ranking.sort_values(by=['avg_combined_relevance_score', 'recommendation_count'], ascending=[False, False])
     final_ranking.rename(columns={'max_rating': 'rating'}, inplace=True)
-    
-    top_recommendations = final_ranking[['title', 'rating', 'avg_combined_relevance_score', 'book_genres']].head(top_n_items)
-    
+
+    top_recommendations = final_ranking[['title', 'rating', 'avg_combined_relevance_score', 'book_genres', 'book_description']].head(top_n_items)
+
     return top_recommendations, nearest_users_report
 
 # ==============================================================================
@@ -309,7 +310,7 @@ elif selected_view == "Existing User Recs 👤":
             rec_df = get_ranked_recommendations_for_user(user_id, user_profiles, df, model_genre, nn_model_genre, top_n=10)
             
             st.write(f"Top Recommendations for User ID **{user_id}**:")
-            st.dataframe(rec_df[['title', 'rating', 'combined_relevance_score']])
+            st.dataframe(rec_df[['title', 'rating', 'combined_relevance_score', 'description']])
 
 
 elif selected_view == "New User Profile Recs 🤝":
