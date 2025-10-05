@@ -32,6 +32,7 @@ def map_age_to_bucket(age: int) -> str:
     else: return '56+'
 
 # --- DATA LOADING (NON-CACHED) ---
+@st.cache_data(show_spinner=False) # Caching data loading for speed
 def load_and_preprocess_data(_status_placeholder): 
     """Loads, cleans, and prepares books data and user profiles. **FIXED GENRE WEIGHTING**"""
     _status_placeholder.text("1/3: Loading and Preprocessing Data Files...") 
@@ -55,7 +56,8 @@ def load_and_preprocess_data(_status_placeholder):
         user_profiles_df['genres'] = user_profiles_df['genres'].apply(safe_literal_eval)
         
         # Prepare features for User Similarity Model
-        user_profiles_df['age_bucket'] = user_profiles_df['age'].apply(map_age_to_bucket)
+        # NOTE: This line requires the 'age' column to exist in user_profiles_df
+        user_profiles_df['age_bucket'] = user_profiles_df['age'].apply(map_age_to_bucket) 
         
         # **FIX APPLIED:** Repeat genre string 3 times to boost genre weight for ALL existing user profiles
         user_profiles_df['feature_string'] = (
@@ -67,11 +69,12 @@ def load_and_preprocess_data(_status_placeholder):
         
         return df_books, user_profiles_df
     except FileNotFoundError as e:
-        st.error(f"Required data file not found: {e}. Please ensure data.csv and movie user files are present.")
+        st.error(f"Required data file not found: {e}. Please ensure data.csv and user_profiles.csv are present in the 'datasets' folder.")
         return pd.DataFrame(), pd.DataFrame()
 
 
 # --- CACHED MODEL INITIALIZATION ---
+@st.cache_resource(show_spinner=False) # Use st.cache_resource for models
 def initialize_and_train_models(df_data, user_profiles_df, _status_placeholder, _progress_bar_placeholder): 
     """
     Initializes SentenceTransformers and loads pre-trained NN models (or trains them if missing).
@@ -83,14 +86,14 @@ def initialize_and_train_models(df_data, user_profiles_df, _status_placeholder, 
         st.stop()
         
     # --- FAST PATH: Load Pre-trained NN Models (The desired path) ---
-    # The InconsistentVersionWarning is expected here if sklearn versions mismatch, but the code proceeds.
     if os.path.exists(NN_GENRE_MODEL_PATH) and os.path.exists(NN_USER_MODEL_PATH):
         _status_placeholder.text("2/3: Loading all pre-trained models (Instantaneous)...")
         _progress_bar_placeholder.progress(33)
         
-        # Load model instances (needed for new query encoding)
-        model_genre = SentenceTransformer(LOCAL_MODEL_PATH)
-        model_user = SentenceTransformer(LOCAL_MODEL_PATH)
+        # Load model instances ONLY ONCE (CRITICAL FIX)
+        model_instance = SentenceTransformer(LOCAL_MODEL_PATH)
+        model_genre = model_instance 
+        model_user = model_instance
         
         # Load pre-trained NearestNeighbors models (INSTANT LOAD)
         nn_model_genre = joblib.load(NN_GENRE_MODEL_PATH) 
@@ -109,9 +112,11 @@ def initialize_and_train_models(df_data, user_profiles_df, _status_placeholder, 
     _status_placeholder.text("2/4: Loading Models and Embeddings (Trained models not found, training required)...")
     _progress_bar_placeholder.progress(25)
     
-    # Load Model Instances & Embeddings
-    model_genre = SentenceTransformer(LOCAL_MODEL_PATH)
-    model_user = SentenceTransformer(LOCAL_MODEL_PATH) 
+    # Load Model Instances & Embeddings (CRITICAL FIX)
+    model_instance = SentenceTransformer(LOCAL_MODEL_PATH)
+    model_genre = model_instance
+    model_user = model_instance 
+    
     genre_embeddings = np.load(GENRE_EMBEDDINGS_PATH)
     user_embeddings = np.load(USER_EMBEDDINGS_PATH)
     K_NEIGHBORS = 50 # Constant for NN training
@@ -162,6 +167,7 @@ def get_ranked_recommendations_for_user(user_id, user_profile_data, df_data, mod
     candidate_df['combined_relevance_score'] = (WEIGHT_GENRE * candidate_df['normalized_genre_similarity']) + (WEIGHT_RATING * candidate_df['normalized_rating'])
     ranked_recommendations = candidate_df.sort_values(by='combined_relevance_score', ascending=False)
 
+    # Note: Fixed the typo 'combined_relevancclar' in the return DataFrame columns
     top_recommendations = ranked_recommendations[['title', 'rating', 'combined_relevance_score', 'description']].head(top_n)
     top_recommendations['user_id'] = user_id
     top_recommendations['cluster'] = user_profile['cluster']
@@ -263,13 +269,16 @@ progress_bar_placeholder = st.sidebar.empty()
 
 # LOAD ALL DATA AND MODELS
 with initial_loading_spinner.container():
+    # Adding st.cache_data to load_and_preprocess_data is a good practice
     with st.spinner("Initializing Data and Models..."):
+        # The cache decorator was moved to the function definition
         df, user_profiles = load_and_preprocess_data(status_placeholder) 
 
         if df.empty or user_profiles.empty:
             st.stop()
 
         try:
+            # The cache decorator was moved to the function definition
             model_genre, nn_model_genre, model_user, nn_model_user = initialize_and_train_models(
                 df, user_profiles, status_placeholder, progress_bar_placeholder
             )
@@ -310,17 +319,22 @@ if selected_view == "Data Overview 📊":
         st.subheader("Movie User Profiles Overview")
         
         try:
-            user_profiles_display = pd.read_csv(USER_PROFILES_PATH)
-            st.info(f"Showing first 5 rows of the **{len(user_profiles_display)}** total user profiles derived from movie ratings.")
-            st.dataframe(user_profiles_display.head())
-        except FileNotFoundError:
-            st.warning(f"Could not load display data from {USER_PROFILES_PATH}. Please ensure the file exists.")
+            # Use the already loaded user_profiles for consistency
+            st.info(f"Showing first 5 rows of the **{len(user_profiles)}** total user profiles derived from movie ratings.")
+            st.dataframe(user_profiles.head())
+        except Exception:
+            st.warning("Could not display loaded user profiles data.")
     
 
 elif selected_view == "Existing User Recs 👤":
     st.header("Recommendations for Existing Users (Content-Based)")
     st.caption("Select a known user ID to view content-based recommendations based solely on their derived cluster preferences.")
 
+    # Check if 'user_id' exists before using it
+    if 'user_id' not in user_profiles.columns:
+        st.error("Cannot display existing user recs: 'user_id' column is missing from user profiles data.")
+        st.stop()
+        
     user_id = st.selectbox("Select User ID", user_profiles['user_id'].tolist())
 
     if user_id:
@@ -329,8 +343,8 @@ elif selected_view == "Existing User Recs 👤":
             rec_df = get_ranked_recommendations_for_user(user_id, user_profiles, df, model_genre, nn_model_genre, top_n=10)
             
             st.write(f"Top Recommendations for User ID **{user_id}**:")
-            st.dataframe(rec_df[['title', 'rating', 'combined_relevancclar'
-            'e_score', 'description']])
+            # Fix: Ensure the column names match the returned dataframe
+            st.dataframe(rec_df[['title', 'rating', 'combined_relevance_score', 'description']])
 
 
 elif selected_view == "New User Profile Recs 🤝":
@@ -349,7 +363,13 @@ elif selected_view == "New User Profile Recs 🤝":
             new_gender = st.selectbox("Gender", ['M', 'F'], index=0)
         
         with col2:
-            default_occ_idx = int(np.where(occupations == 'programmer')[0][0]) if 'programmer' in occupations else 0 
+            # Find index safely
+            default_occ_idx = 0
+            if 'programmer' in occupations:
+                try:
+                    default_occ_idx = int(np.where(occupations == 'programmer')[0][0])
+                except IndexError:
+                    pass
             new_occupation = st.selectbox("Occupation", occupations, index=default_occ_idx)
             new_genres = st.multiselect("Preferred Genres", sorted(list(all_genres)), default=['Sci-Fi', 'Action', 'Thriller'])
         
