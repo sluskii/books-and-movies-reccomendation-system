@@ -157,8 +157,8 @@ def get_ranked_recommendations_for_user(user_id, user_profile_data, df_data, mod
     
     candidate_df['combined_relevance_score'] = (WEIGHT_GENRE * candidate_df['normalized_genre_similarity']) + (WEIGHT_RATING * candidate_df['normalized_rating'])
     ranked_recommendations = candidate_df.sort_values(by='combined_relevance_score', ascending=False)
-    
-    top_recommendations = ranked_recommendations[['title', 'rating', 'combined_relevance_score']].head(top_n)
+
+    top_recommendations = ranked_recommendations[['title', 'rating', 'combined_relevance_score', 'description']].head(top_n)
     top_recommendations['user_id'] = user_id
     top_recommendations['cluster'] = user_profile['cluster']
     
@@ -216,21 +216,22 @@ def get_combined_recommendations(
     if not all_recommendations: return pd.DataFrame(), nearest_users_report
     
     final_combined_df = pd.concat(all_recommendations)
-    final_combined_df = pd.merge(final_combined_df, item_data[['title', 'genres_string']].drop_duplicates(), on='title', how='left')
+    final_combined_df = pd.merge(final_combined_df, item_data[['title', 'genres_string', 'description']].drop_duplicates(), on='title', how='left')
     
     # --- Part 3: Aggregate and Re-rank the Final List ---
     final_ranking = final_combined_df.groupby('title').agg(
         avg_combined_relevance_score=('combined_relevance_score', 'mean'),
         max_rating=('rating', 'max'),
         recommendation_count=('title', 'count'), 
-        book_genres=('genres_string', 'first') 
+        book_genres=('genres_string', 'first'),
+        book_description=('description', 'first')
     ).reset_index()
     
     final_ranking = final_ranking.sort_values(by=['avg_combined_relevance_score', 'recommendation_count'], ascending=[False, False])
     final_ranking.rename(columns={'max_rating': 'rating'}, inplace=True)
-    
-    top_recommendations = final_ranking[['title', 'rating', 'avg_combined_relevance_score', 'book_genres']].head(top_n_items)
-    
+
+    top_recommendations = final_ranking[['title', 'rating', 'avg_combined_relevance_score', 'book_genres', 'book_description']].head(top_n_items)
+
     return top_recommendations, nearest_users_report
 
 # ==============================================================================
@@ -309,7 +310,7 @@ elif selected_view == "Existing User Recs 👤":
             rec_df = get_ranked_recommendations_for_user(user_id, user_profiles, df, model_genre, nn_model_genre, top_n=10)
             
             st.write(f"Top Recommendations for User ID **{user_id}**:")
-            st.dataframe(rec_df[['title', 'rating', 'combined_relevance_score']])
+            st.dataframe(rec_df[['title', 'rating', 'combined_relevance_score', 'description']])
 
 
 elif selected_view == "New User Profile Recs 🤝":
@@ -328,7 +329,6 @@ elif selected_view == "New User Profile Recs 🤝":
             new_gender = st.selectbox("Gender", ['M', 'F'], index=0)
         
         with col2:
-            # FIX: Cast the result of np.where to a standard Python integer
             default_occ_idx = int(np.where(occupations == 'programmer')[0][0]) if 'programmer' in occupations else 0 
             new_occupation = st.selectbox("Occupation", occupations, index=default_occ_idx)
             new_genres = st.multiselect("Preferred Genres", sorted(list(all_genres)), default=['Sci-Fi', 'Action', 'Thriller'])
