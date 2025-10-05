@@ -10,7 +10,7 @@ from sklearn.neighbors import NearestNeighbors
 st.set_page_config(page_title="🎬 Movie-Informed Book Recs", layout="wide")
 st.title("🎬 Movie Preferences → 📚 Book Recommendations")
 
-# --- DEPLOYMENT-SAFE CONSTANTS ---
+# --- CONSTANT DEFINITION ---
 LOCAL_MODEL_PATH = './local_sentence_transformer_model'
 GENRE_EMBEDDINGS_PATH = 'genre_embeddings.npy' 
 USER_EMBEDDINGS_PATH = 'user_embeddings.npy' 
@@ -31,10 +31,10 @@ def map_age_to_bucket(age: int) -> str:
     elif 50 <= age <= 55: return '50-55'
     else: return '56+'
 
-# --- DATA LOADING (CACHED) ---
-@st.cache_data
-def load_and_preprocess_data(): 
-    """Loads, cleans, and prepares books data and user profiles. **FIXED GENRE WEIGHTING**"""
+# --- DATA LOADING (NON-CACHED) ---
+def load_and_preprocess_data(_status_placeholder): 
+    """Loads, cleans, and prepares books data and user profiles."""
+    _status_placeholder.text("1/3: Loading and Preprocessing Data Files...") 
     
     try:
         # 1. Load Books Data (df)
@@ -56,14 +56,12 @@ def load_and_preprocess_data():
         
         # Prepare features for User Similarity Model
         user_profiles_df['age_bucket'] = user_profiles_df['age'].apply(map_age_to_bucket)
-        
-        # **FIX APPLIED:** Repeat genre string 3 times to boost genre weight for ALL existing user profiles
         user_profiles_df['feature_string'] = (
             user_profiles_df['gender'] + ' ' +
             user_profiles_df['occupation_name'] + ' ' +
             user_profiles_df['age_bucket'] + ' ' +
-            user_profiles_df['genres'].apply(lambda x: (' '.join(x) + ' ') * 3 if isinstance(x, list) else str(x))
-        ).str.strip()
+            user_profiles_df['genres'].apply(lambda x: ' '.join(x) if isinstance(x, list) else str(x))
+        )
         
         return df_books, user_profiles_df
     except FileNotFoundError as e:
@@ -72,20 +70,20 @@ def load_and_preprocess_data():
 
 
 # --- CACHED MODEL INITIALIZATION ---
-@st.cache_resource
-def initialize_and_train_models(df_data, user_profiles_df): 
+def initialize_and_train_models(df_data, user_profiles_df, _status_placeholder, _progress_bar_placeholder): 
     """
     Initializes SentenceTransformers and loads pre-trained NN models (or trains them if missing).
     """
     
     # 1. Check for basic prerequisites
     if not os.path.exists(LOCAL_MODEL_PATH) or not os.listdir(LOCAL_MODEL_PATH):
-        st.error(f"🚨 Model weights not found at **{LOCAL_MODEL_PATH}**. Please run `python model_setup.py` first.")
+        _status_placeholder.error(f"🚨 Model weights not found at **{LOCAL_MODEL_PATH}**. Please run `python model_setup.py` first.")
         st.stop()
         
     # --- FAST PATH: Load Pre-trained NN Models (The desired path) ---
-    # The InconsistentVersionWarning is expected here if sklearn versions mismatch, but the code proceeds.
     if os.path.exists(NN_GENRE_MODEL_PATH) and os.path.exists(NN_USER_MODEL_PATH):
+        _status_placeholder.text("2/3: Loading all pre-trained models (Instantaneous)...")
+        _progress_bar_placeholder.progress(33)
         
         # Load model instances (needed for new query encoding)
         model_genre = SentenceTransformer(LOCAL_MODEL_PATH)
@@ -95,30 +93,44 @@ def initialize_and_train_models(df_data, user_profiles_df):
         nn_model_genre = joblib.load(NN_GENRE_MODEL_PATH) 
         nn_model_user = joblib.load(NN_USER_MODEL_PATH)   
         
+        _status_placeholder.text("3/3: All models loaded and ready. ✅")
+        _progress_bar_placeholder.progress(100)
+        st.toast("App startup complete! ✅", icon='⚡')
         return model_genre, nn_model_genre, model_user, nn_model_user
 
     # --- SLOW PATH (Fallback: If joblib files don't exist, we must train) ---
     if not os.path.exists(GENRE_EMBEDDINGS_PATH) or not os.path.exists(USER_EMBEDDINGS_PATH):
-        st.error("🚨 Embeddings files are missing. Please run the setup script to create them.")
+        _status_placeholder.error("🚨 Embeddings files are missing. Please run the setup script to create them.")
         st.stop()
 
+    _status_placeholder.text("2/4: Loading Models and Embeddings (Trained models not found, training required)...")
+    _progress_bar_placeholder.progress(25)
+    
     # Load Model Instances & Embeddings
     model_genre = SentenceTransformer(LOCAL_MODEL_PATH)
     model_user = SentenceTransformer(LOCAL_MODEL_PATH) 
     genre_embeddings = np.load(GENRE_EMBEDDINGS_PATH)
     user_embeddings = np.load(USER_EMBEDDINGS_PATH)
-    K_NEIGHBORS = 10
+    K_NEIGHBORS = 50 # Constant for NN training
 
     # 3. Training and Saving Genre Nearest Neighbors (SLOW STEP)
+    _status_placeholder.text("3/4: Training Item NearestNeighbors Model...")
+    _progress_bar_placeholder.progress(50)
     nn_model_genre = NearestNeighbors(n_neighbors=K_NEIGHBORS, metric='cosine', algorithm='auto')
     nn_model_genre.fit(genre_embeddings)
     joblib.dump(nn_model_genre, NN_GENRE_MODEL_PATH) # <-- SAVE TRAINED MODEL
 
     # 4. Training and Saving User Nearest Neighbors (SLOW STEP)
+    _status_placeholder.text("4/4: Training User NearestNeighbors Model...")
+    _progress_bar_placeholder.progress(75)
     nn_model_user = NearestNeighbors(n_neighbors=K_NEIGHBORS, metric='cosine', algorithm='auto')
     nn_model_user.fit(user_embeddings)
     joblib.dump(nn_model_user, NN_USER_MODEL_PATH) # <-- SAVE TRAINED MODEL
 
+    # Finalize
+    _progress_bar_placeholder.progress(100)
+    _status_placeholder.success("App Ready! ✅ (Trained models saved for next run!)")
+    
     return model_genre, nn_model_genre, model_user, nn_model_user
 
 # ==============================================================================
@@ -126,7 +138,7 @@ def initialize_and_train_models(df_data, user_profiles_df):
 # ==============================================================================
 
 def get_ranked_recommendations_for_user(user_id, user_profile_data, df_data, model_genre, nn_model_genre, WEIGHT_GENRE = 0.95, WEIGHT_RATING = 0.05, top_n=10, initial_candidates=50):
-    """ Content-Based Re-ranking for a single user. **WEIGHTS ADJUSTED**"""
+    """ Content-Based Re-ranking for a single user. """
     user_profile = user_profile_data[user_profile_data['user_id'] == user_id].iloc[0]
     genre_list = user_profile['genres']
     
@@ -145,8 +157,8 @@ def get_ranked_recommendations_for_user(user_id, user_profile_data, df_data, mod
     
     candidate_df['combined_relevance_score'] = (WEIGHT_GENRE * candidate_df['normalized_genre_similarity']) + (WEIGHT_RATING * candidate_df['normalized_rating'])
     ranked_recommendations = candidate_df.sort_values(by='combined_relevance_score', ascending=False)
-
-    top_recommendations = ranked_recommendations[['title', 'rating', 'combined_relevance_score', 'description']].head(top_n)
+    
+    top_recommendations = ranked_recommendations[['title', 'rating', 'combined_relevance_score']].head(top_n)
     top_recommendations['user_id'] = user_id
     top_recommendations['cluster'] = user_profile['cluster']
     
@@ -157,9 +169,7 @@ def predict_user_cluster(new_user_age: int, new_user_gender: str, new_user_occup
     
     new_user_age_bucket = map_age_to_bucket(new_user_age)
     new_user_genre_string = ' '.join(new_user_genres)
-    
-    # **FIX APPLIED:** Ensure new user query also has the 3x genre weight boost
-    new_user_feature_string = (f"{new_user_gender} {new_user_occupation} {new_user_age_bucket} {new_user_genre_string} {new_user_genre_string} {new_user_genre_string}")
+    new_user_feature_string = (f"{new_user_gender} {new_user_occupation} {new_user_age_bucket} {new_user_genre_string}")
     
     new_user_embedding = model_user.encode(new_user_feature_string).reshape(1, -1)
     
@@ -178,14 +188,12 @@ def get_combined_recommendations(
     model_genre: SentenceTransformer, nn_model_genre: NearestNeighbors,
     top_n_items: int = 10, k_similar_users: int = 3, WEIGHT_GENRE: float = 0.95, WEIGHT_RATING: float = 0.05
 ):
-    """ Master function: CF (Find Users) -> CB (Re-rank) -> Aggregate. **WEIGHTS ADJUSTED**"""
+    """ Master function: CF (Find Users) -> CB (Re-rank) -> Aggregate. """
     
     # --- Part 1: Find K Similar Users & Extract Details (CF Component) ---
     new_user_age_bucket = map_age_to_bucket(new_user_age)
     new_user_genre_string = ' '.join(new_user_genres)
-    
-    # **FIX APPLIED:** Ensure new user query has the 3x genre weight boost
-    new_user_feature_string = (f"{new_user_gender} {new_user_occupation} {new_user_age_bucket} {new_user_genre_string} {new_user_genre_string} {new_user_genre_string}")
+    new_user_feature_string = (f"{new_user_gender} {new_user_occupation} {new_user_age_bucket} {new_user_genre_string}")
     new_user_embedding = model_user.encode(new_user_feature_string).reshape(1, -1)
     
     distances, indices = nn_model_user.kneighbors(new_user_embedding, n_neighbors=k_similar_users)
@@ -197,43 +205,32 @@ def get_combined_recommendations(
 
     # --- Part 2: Generate and Aggregate Recommendations ---
     all_recommendations = []
-    
-    # **WEIGHTS ADJUSTED:** Use the new weights (0.95, 0.05)
     for user_id in similar_user_ids:
         rec_df = get_ranked_recommendations_for_user(
             user_id=user_id, user_profile_data=user_profiles_df, df_data=item_data,                 
             model_genre=model_genre, nn_model_genre=nn_model_genre,
             WEIGHT_GENRE=WEIGHT_GENRE, WEIGHT_RATING=WEIGHT_RATING, top_n=20, initial_candidates=50
         )
-        # Fix: Ensure only 'user_id' and 'cluster' are dropped, leaving 'description'
-        all_recommendations.append(rec_df.drop(columns=['user_id', 'cluster'])) 
+        all_recommendations.append(rec_df.drop(columns=['user_id', 'cluster']))
 
     if not all_recommendations: return pd.DataFrame(), nearest_users_report
     
     final_combined_df = pd.concat(all_recommendations)
-    
-    # Fix: Merge with item_data to get the 'genres_string' and canonical 'description'.
-    final_combined_df = pd.merge(
-        final_combined_df.drop(columns=['description'], errors='ignore'), # Drop the description from the current DF
-        item_data[['title', 'genres_string', 'description']].drop_duplicates(), # Merge with the canonical description from item_data
-        on='title', 
-        how='left'
-    )
+    final_combined_df = pd.merge(final_combined_df, item_data[['title', 'genres_string']].drop_duplicates(), on='title', how='left')
     
     # --- Part 3: Aggregate and Re-rank the Final List ---
     final_ranking = final_combined_df.groupby('title').agg(
         avg_combined_relevance_score=('combined_relevance_score', 'mean'),
         max_rating=('rating', 'max'),
         recommendation_count=('title', 'count'), 
-        book_genres=('genres_string', 'first'),
-        book_description=('description', 'first')
+        book_genres=('genres_string', 'first') 
     ).reset_index()
     
     final_ranking = final_ranking.sort_values(by=['avg_combined_relevance_score', 'recommendation_count'], ascending=[False, False])
     final_ranking.rename(columns={'max_rating': 'rating'}, inplace=True)
-
-    top_recommendations = final_ranking[['title', 'rating', 'avg_combined_relevance_score', 'book_genres', 'book_description']].head(top_n_items)
-
+    
+    top_recommendations = final_ranking[['title', 'rating', 'avg_combined_relevance_score', 'book_genres']].head(top_n_items)
+    
     return top_recommendations, nearest_users_report
 
 # ==============================================================================
@@ -248,21 +245,15 @@ progress_bar_placeholder = st.sidebar.empty()
 # LOAD ALL DATA AND MODELS
 with initial_loading_spinner.container():
     with st.spinner("Initializing Data and Models..."):
-        status_placeholder.text("1/3: Loading and Preprocessing Data Files...")
-        df, user_profiles = load_and_preprocess_data() 
+        df, user_profiles = load_and_preprocess_data(status_placeholder) 
 
         if df.empty or user_profiles.empty:
             st.stop()
 
         try:
-            status_placeholder.text("2/3: Loading Models...")
-            progress_bar_placeholder.progress(50)
             model_genre, nn_model_genre, model_user, nn_model_user = initialize_and_train_models(
-                df, user_profiles
+                df, user_profiles, status_placeholder, progress_bar_placeholder
             )
-            status_placeholder.text("3/3: All models loaded and ready. ✅")
-            progress_bar_placeholder.progress(100)
-            st.toast("App startup complete! ✅", icon='⚡')
         except SystemExit:
             st.stop()
             
@@ -315,12 +306,10 @@ elif selected_view == "Existing User Recs 👤":
 
     if user_id:
         with st.spinner(f"Generating content-based recommendations for User {user_id}..."):
-            # This uses the fixed weights (0.95, 0.05)
             rec_df = get_ranked_recommendations_for_user(user_id, user_profiles, df, model_genre, nn_model_genre, top_n=10)
             
             st.write(f"Top Recommendations for User ID **{user_id}**:")
-            st.dataframe(rec_df[['title', 'rating', 'combined_relevancclar'
-            'e_score', 'description']])
+            st.dataframe(rec_df[['title', 'rating', 'combined_relevance_score']])
 
 
 elif selected_view == "New User Profile Recs 🤝":
@@ -339,6 +328,7 @@ elif selected_view == "New User Profile Recs 🤝":
             new_gender = st.selectbox("Gender", ['M', 'F'], index=0)
         
         with col2:
+            # FIX: Cast the result of np.where to a standard Python integer
             default_occ_idx = int(np.where(occupations == 'programmer')[0][0]) if 'programmer' in occupations else 0 
             new_occupation = st.selectbox("Occupation", occupations, index=default_occ_idx)
             new_genres = st.multiselect("Preferred Genres", sorted(list(all_genres)), default=['Sci-Fi', 'Action', 'Thriller'])
@@ -355,7 +345,6 @@ elif selected_view == "New User Profile Recs 🤝":
             st.warning("Please select at least one preferred genre.")
         else:
             with st.spinner(f"Finding {K_USERS} similar users and aggregating recommendations..."):
-                # This uses the fixed weights (0.95, 0.05) and the genre-boosted query
                 recommendations_df, user_context = get_combined_recommendations(
                     new_user_age=new_age, new_user_gender=new_gender, new_user_occupation=new_occupation, new_user_genres=new_genres,
                     user_profiles_df=user_profiles, item_data=df,                      
