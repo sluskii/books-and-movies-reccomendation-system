@@ -329,7 +329,8 @@ elif selected_view == "Existing User Recs 👤":
             rec_df = get_ranked_recommendations_for_user(user_id, user_profiles, df, model_genre, nn_model_genre, top_n=10)
             
             st.write(f"Top Recommendations for User ID **{user_id}**:")
-            st.dataframe(rec_df[['title', 'rating', 'combined_relevance_score', 'description']])
+            st.dataframe(rec_df[['title', 'rating', 'combined_relevancclar'
+            'e_score', 'description']])
 
 
 elif selected_view == "New User Profile Recs 🤝":
