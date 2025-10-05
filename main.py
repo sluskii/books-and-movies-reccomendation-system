@@ -211,12 +211,23 @@ def get_combined_recommendations(
             model_genre=model_genre, nn_model_genre=nn_model_genre,
             WEIGHT_GENRE=WEIGHT_GENRE, WEIGHT_RATING=WEIGHT_RATING, top_n=20, initial_candidates=50
         )
-        all_recommendations.append(rec_df.drop(columns=['user_id', 'cluster']))
+        # 🐛 FIX 1: DO NOT drop 'description' here. Only drop 'user_id' and 'cluster'
+        all_recommendations.append(rec_df.drop(columns=['user_id', 'cluster'])) # KEEP 'description'
 
     if not all_recommendations: return pd.DataFrame(), nearest_users_report
     
     final_combined_df = pd.concat(all_recommendations)
-    final_combined_df = pd.merge(final_combined_df, item_data[['title', 'genres_string', 'description']].drop_duplicates(), on='title', how='left')
+    # This merge adds 'genres_string', which is kept, but it also adds 'description' again (redundantly)
+    # The fix is to ensure the description is in the initial rec_df and not dropped.
+    # We will still merge here to ensure we have the 'genres_string' which was NOT in the original rec_df
+    final_combined_df = pd.merge(final_combined_df, item_data[['title', 'genres_string', 'description']].drop_duplicates(), on='title', how='left', suffixes=('_rec', '_full'))
+    
+    # We now take the 'description' from the recommendation, which should be the same as the full data one,
+    # but since the merge might have introduced description_rec and description_full, let's simplify and use
+    # the one from the recommendation (which is already there). We'll drop the redundant one if present.
+    if 'description_full' in final_combined_df.columns:
+        final_combined_df.drop(columns=['description_full'], inplace=True)
+        final_combined_df.rename(columns={'description_rec': 'description'}, inplace=True)
     
     # --- Part 3: Aggregate and Re-rank the Final List ---
     final_ranking = final_combined_df.groupby('title').agg(
@@ -224,7 +235,7 @@ def get_combined_recommendations(
         max_rating=('rating', 'max'),
         recommendation_count=('title', 'count'), 
         book_genres=('genres_string', 'first'),
-        book_description=('description', 'first')
+        book_description=('description', 'first') 
     ).reset_index()
     
     final_ranking = final_ranking.sort_values(by=['avg_combined_relevance_score', 'recommendation_count'], ascending=[False, False])
