@@ -33,7 +33,7 @@ def map_age_to_bucket(age: int) -> str:
 
 # --- DATA LOADING (NON-CACHED) ---
 def load_and_preprocess_data(_status_placeholder): 
-    """Loads, cleans, and prepares books data and user profiles."""
+    """Loads, cleans, and prepares books data and user profiles. **FIXED GENRE WEIGHTING**"""
     _status_placeholder.text("1/3: Loading and Preprocessing Data Files...") 
     
     try:
@@ -56,12 +56,14 @@ def load_and_preprocess_data(_status_placeholder):
         
         # Prepare features for User Similarity Model
         user_profiles_df['age_bucket'] = user_profiles_df['age'].apply(map_age_to_bucket)
+        
+        # **FIX APPLIED:** Repeat genre string 3 times to boost genre weight for ALL existing user profiles
         user_profiles_df['feature_string'] = (
             user_profiles_df['gender'] + ' ' +
             user_profiles_df['occupation_name'] + ' ' +
             user_profiles_df['age_bucket'] + ' ' +
-            user_profiles_df['genres'].apply(lambda x: ' '.join(x) if isinstance(x, list) else str(x))
-        )
+            user_profiles_df['genres'].apply(lambda x: (' '.join(x) + ' ') * 3 if isinstance(x, list) else str(x))
+        ).str.strip()
         
         return df_books, user_profiles_df
     except FileNotFoundError as e:
@@ -81,6 +83,7 @@ def initialize_and_train_models(df_data, user_profiles_df, _status_placeholder, 
         st.stop()
         
     # --- FAST PATH: Load Pre-trained NN Models (The desired path) ---
+    # The InconsistentVersionWarning is expected here if sklearn versions mismatch, but the code proceeds.
     if os.path.exists(NN_GENRE_MODEL_PATH) and os.path.exists(NN_USER_MODEL_PATH):
         _status_placeholder.text("2/3: Loading all pre-trained models (Instantaneous)...")
         _progress_bar_placeholder.progress(33)
@@ -138,7 +141,7 @@ def initialize_and_train_models(df_data, user_profiles_df, _status_placeholder, 
 # ==============================================================================
 
 def get_ranked_recommendations_for_user(user_id, user_profile_data, df_data, model_genre, nn_model_genre, WEIGHT_GENRE = 0.95, WEIGHT_RATING = 0.05, top_n=10, initial_candidates=50):
-    """ Content-Based Re-ranking for a single user. """
+    """ Content-Based Re-ranking for a single user. **WEIGHTS ADJUSTED**"""
     user_profile = user_profile_data[user_profile_data['user_id'] == user_id].iloc[0]
     genre_list = user_profile['genres']
     
@@ -155,6 +158,7 @@ def get_ranked_recommendations_for_user(user_id, user_profile_data, df_data, mod
     candidate_df['normalized_rating'] = candidate_df['rating'] / 5.0
     candidate_df['normalized_genre_similarity'] = 1 - candidate_df['genre_distance']
     
+    # **WEIGHTS ADJUSTED:** Increased rating weight from 0.01 to 0.05 to improve diversity.
     candidate_df['combined_relevance_score'] = (WEIGHT_GENRE * candidate_df['normalized_genre_similarity']) + (WEIGHT_RATING * candidate_df['normalized_rating'])
     ranked_recommendations = candidate_df.sort_values(by='combined_relevance_score', ascending=False)
 
@@ -169,7 +173,9 @@ def predict_user_cluster(new_user_age: int, new_user_gender: str, new_user_occup
     
     new_user_age_bucket = map_age_to_bucket(new_user_age)
     new_user_genre_string = ' '.join(new_user_genres)
-    new_user_feature_string = (f"{new_user_gender} {new_user_occupation} {new_user_age_bucket} {new_user_genre_string}")
+    
+    # **FIX APPLIED:** Ensure new user query also has the 3x genre weight boost
+    new_user_feature_string = (f"{new_user_gender} {new_user_occupation} {new_user_age_bucket} {new_user_genre_string} {new_user_genre_string} {new_user_genre_string}")
     
     new_user_embedding = model_user.encode(new_user_feature_string).reshape(1, -1)
     
@@ -188,12 +194,14 @@ def get_combined_recommendations(
     model_genre: SentenceTransformer, nn_model_genre: NearestNeighbors,
     top_n_items: int = 10, k_similar_users: int = 3, WEIGHT_GENRE: float = 0.95, WEIGHT_RATING: float = 0.05
 ):
-    """ Master function: CF (Find Users) -> CB (Re-rank) -> Aggregate. """
+    """ Master function: CF (Find Users) -> CB (Re-rank) -> Aggregate. **WEIGHTS ADJUSTED**"""
     
     # --- Part 1: Find K Similar Users & Extract Details (CF Component) ---
     new_user_age_bucket = map_age_to_bucket(new_user_age)
     new_user_genre_string = ' '.join(new_user_genres)
-    new_user_feature_string = (f"{new_user_gender} {new_user_occupation} {new_user_age_bucket} {new_user_genre_string}")
+    
+    # **FIX APPLIED:** Ensure new user query has the 3x genre weight boost
+    new_user_feature_string = (f"{new_user_gender} {new_user_occupation} {new_user_age_bucket} {new_user_genre_string} {new_user_genre_string} {new_user_genre_string}")
     new_user_embedding = model_user.encode(new_user_feature_string).reshape(1, -1)
     
     distances, indices = nn_model_user.kneighbors(new_user_embedding, n_neighbors=k_similar_users)
@@ -205,29 +213,28 @@ def get_combined_recommendations(
 
     # --- Part 2: Generate and Aggregate Recommendations ---
     all_recommendations = []
+    
+    # **WEIGHTS ADJUSTED:** Use the new weights (0.95, 0.05)
     for user_id in similar_user_ids:
         rec_df = get_ranked_recommendations_for_user(
             user_id=user_id, user_profile_data=user_profiles_df, df_data=item_data,                 
             model_genre=model_genre, nn_model_genre=nn_model_genre,
             WEIGHT_GENRE=WEIGHT_GENRE, WEIGHT_RATING=WEIGHT_RATING, top_n=20, initial_candidates=50
         )
-        # 🐛 FIX 1: DO NOT drop 'description' here. Only drop 'user_id' and 'cluster'
-        all_recommendations.append(rec_df.drop(columns=['user_id', 'cluster'])) # KEEP 'description'
+        # Fix: Ensure only 'user_id' and 'cluster' are dropped, leaving 'description'
+        all_recommendations.append(rec_df.drop(columns=['user_id', 'cluster'])) 
 
     if not all_recommendations: return pd.DataFrame(), nearest_users_report
     
     final_combined_df = pd.concat(all_recommendations)
-    # This merge adds 'genres_string', which is kept, but it also adds 'description' again (redundantly)
-    # The fix is to ensure the description is in the initial rec_df and not dropped.
-    # We will still merge here to ensure we have the 'genres_string' which was NOT in the original rec_df
-    final_combined_df = pd.merge(final_combined_df, item_data[['title', 'genres_string', 'description']].drop_duplicates(), on='title', how='left', suffixes=('_rec', '_full'))
     
-    # We now take the 'description' from the recommendation, which should be the same as the full data one,
-    # but since the merge might have introduced description_rec and description_full, let's simplify and use
-    # the one from the recommendation (which is already there). We'll drop the redundant one if present.
-    if 'description_full' in final_combined_df.columns:
-        final_combined_df.drop(columns=['description_full'], inplace=True)
-        final_combined_df.rename(columns={'description_rec': 'description'}, inplace=True)
+    # Fix: Merge with item_data to get the 'genres_string' and canonical 'description'.
+    final_combined_df = pd.merge(
+        final_combined_df.drop(columns=['description'], errors='ignore'), # Drop the description from the current DF
+        item_data[['title', 'genres_string', 'description']].drop_duplicates(), # Merge with the canonical description from item_data
+        on='title', 
+        how='left'
+    )
     
     # --- Part 3: Aggregate and Re-rank the Final List ---
     final_ranking = final_combined_df.groupby('title').agg(
@@ -235,7 +242,7 @@ def get_combined_recommendations(
         max_rating=('rating', 'max'),
         recommendation_count=('title', 'count'), 
         book_genres=('genres_string', 'first'),
-        book_description=('description', 'first') 
+        book_description=('description', 'first')
     ).reset_index()
     
     final_ranking = final_ranking.sort_values(by=['avg_combined_relevance_score', 'recommendation_count'], ascending=[False, False])
@@ -318,6 +325,7 @@ elif selected_view == "Existing User Recs 👤":
 
     if user_id:
         with st.spinner(f"Generating content-based recommendations for User {user_id}..."):
+            # This uses the fixed weights (0.95, 0.05)
             rec_df = get_ranked_recommendations_for_user(user_id, user_profiles, df, model_genre, nn_model_genre, top_n=10)
             
             st.write(f"Top Recommendations for User ID **{user_id}**:")
@@ -356,6 +364,7 @@ elif selected_view == "New User Profile Recs 🤝":
             st.warning("Please select at least one preferred genre.")
         else:
             with st.spinner(f"Finding {K_USERS} similar users and aggregating recommendations..."):
+                # This uses the fixed weights (0.95, 0.05) and the genre-boosted query
                 recommendations_df, user_context = get_combined_recommendations(
                     new_user_age=new_age, new_user_gender=new_gender, new_user_occupation=new_occupation, new_user_genres=new_genres,
                     user_profiles_df=user_profiles, item_data=df,                      
